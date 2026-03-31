@@ -619,17 +619,18 @@ var YorklibExporter = {
       ["volume", metadata.volume],
       ["issue", metadata.issue],
       ["pages", metadata.pages],
-      ["annote", metadata.annote],
+      ["annote", metadata.annote, false, true],
       ["PMCID", metadata.PMCID],
       ["doi", metadata.doi]
     ];
 
     const lines = [`@Article{${key},`];
-    for (const [field, rawValue, protectTitle] of fields) {
-      if (!rawValue) {
+    for (const [field, rawValue, protectTitle, alwaysInclude] of fields) {
+      if (!rawValue && !alwaysInclude) {
         continue;
       }
-      const value = this.formatBibValue(String(rawValue), Boolean(protectTitle));
+      const normalizedValue = this.normalizeBibFieldValue(field, rawValue == null ? "" : String(rawValue));
+      const value = this.formatBibValue(normalizedValue, Boolean(protectTitle));
       lines.push(`    ${(field + " =").padEnd(11, " ")} ${value},`);
     }
     lines.push("}");
@@ -637,14 +638,21 @@ var YorklibExporter = {
     return lines.join("\n");
   },
 
+  normalizeBibFieldValue(field, value) {
+    const normalized = String(value).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (field === "annote") {
+      // Yorklib's validator is much less fragile when the abstract stays on one logical line.
+      return normalized.replace(/\s*\n\s*/g, " ").replace(/\s+/g, " ").trim();
+    }
+    return normalized;
+  },
+
   formatBibValue(value, protectTitle) {
     if (/^\d+$/.test(value)) {
       return value;
     }
 
-    let escaped = this.convertUnicodeToLatex(value)
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n");
+    const escaped = this.convertUnicodeToLatex(value);
 
     if (protectTitle) {
       return `{{${escaped}}}`;
@@ -653,86 +661,208 @@ var YorklibExporter = {
   },
 
   convertUnicodeToLatex(value) {
-    const replacements = [
-      [/\u03b1/g, "{$\\alpha$}"],
-      [/\u03b2/g, "{$\\beta$}"],
-      [/\u03b3/g, "{$\\gamma$}"],
-      [/\u03b4/g, "{$\\delta$}"],
-      [/\u03b5/g, "{$\\epsilon$}"],
-      [/\u03b6/g, "{$\\zeta$}"],
-      [/\u03b7/g, "{$\\eta$}"],
-      [/\u03b8/g, "\\texttheta{}"],
-      [/\u03b9/g, "{$\\iota$}"],
-      [/\u03ba/g, "{$\\kappa$}"],
-      [/\u03bb/g, "{$\\lambda$}"],
-      [/\u03bc/g, "{$\\mu$}"],
-      [/\u03bd/g, "{$\\nu$}"],
-      [/\u03be/g, "{$\\xi$}"],
-      [/\u03c0/g, "{$\\pi$}"],
-      [/\u03c1/g, "{$\\rho$}"],
-      [/\u03c3/g, "{$\\sigma$}"],
-      [/\u03c4/g, "{$\\tau$}"],
-      [/\u03c5/g, "{$\\upsilon$}"],
-      [/\u03c6/g, "{$\\phi$}"],
-      [/\u03c7/g, "{$\\chi$}"],
-      [/\u03c8/g, "{$\\psi$}"],
-      [/\u03c9/g, "{$\\omega$}"],
-      [/\u0394/g, "{$\\Delta$}"],
-      [/\u0398/g, "{$\\Theta$}"],
-      [/\u039b/g, "{$\\Lambda$}"],
-      [/\u039e/g, "{$\\Xi$}"],
-      [/\u03a0/g, "{$\\Pi$}"],
-      [/\u03a3/g, "{$\\Sigma$}"],
-      [/\u03a6/g, "{$\\Phi$}"],
-      [/\u03a8/g, "{$\\Psi$}"],
-      [/\u03a9/g, "{$\\Omega$}"],
-      [/\u00d7/g, "\\texttimes{}"],
-      [/\u00b1/g, "{$\\pm$}"],
-      [/\u2212/g, "--"],
-      [/\u2013/g, "--"],
-      [/\u2014/g, "---"],
-      [/\u00b0/g, "{$^\\circ$}"],
-      [/\u212b/g, "\\AA{}"],
-      [/\u00c5/g, "\\AA{}"],
-      [/\u00e5/g, "\\aa{}"],
-      [/\u2264/g, "{$\\leq$}"],
-      [/\u2265/g, "{$\\geq$}"],
-      [/\u2248/g, "{$\\approx$}"],
-      [/\u00d7\s*10/g, "\\texttimes{} 10"],
-      [/\u00a0/g, " "],
-      [/\u2009/g, " "],
-      [/\u2002/g, " "],
-      [/\u2003/g, " "]
-    ];
+    const directMap = {
+      "\u03b1": "{$\\alpha$}",
+      "\u03b2": "{$\\beta$}",
+      "\u03b3": "{$\\gamma$}",
+      "\u03b4": "{$\\delta$}",
+      "\u03b5": "{$\\epsilon$}",
+      "\u03b6": "{$\\zeta$}",
+      "\u03b7": "{$\\eta$}",
+      "\u03b8": "{$\\theta$}",
+      "\u03b9": "{$\\iota$}",
+      "\u03ba": "{$\\kappa$}",
+      "\u03bb": "{$\\lambda$}",
+      "\u03bc": "{$\\mu$}",
+      "\u03bd": "{$\\nu$}",
+      "\u03be": "{$\\xi$}",
+      "\u03c0": "{$\\pi$}",
+      "\u03c1": "{$\\rho$}",
+      "\u03c3": "{$\\sigma$}",
+      "\u03c4": "{$\\tau$}",
+      "\u03c5": "{$\\upsilon$}",
+      "\u03c6": "{$\\phi$}",
+      "\u03c7": "{$\\chi$}",
+      "\u03c8": "{$\\psi$}",
+      "\u03c9": "{$\\omega$}",
+      "\u0394": "{$\\Delta$}",
+      "\u0398": "{$\\Theta$}",
+      "\u039b": "{$\\Lambda$}",
+      "\u039e": "{$\\Xi$}",
+      "\u03a0": "{$\\Pi$}",
+      "\u03a3": "{$\\Sigma$}",
+      "\u03a6": "{$\\Phi$}",
+      "\u03a8": "{$\\Psi$}",
+      "\u03a9": "{$\\Omega$}",
+      "\u00d7": "{$\\times$}",
+      "\u00b1": "{$\\pm$}",
+      "\u2212": "--",
+      "\u2013": "--",
+      "\u2014": "---",
+      "\u00b0": "{$^\\circ$}",
+      "\u212b": "\\AA{}",
+      "\u2264": "{$\\leq$}",
+      "\u2265": "{$\\geq$}",
+      "\u2248": "{$\\approx$}",
+      "\u2018": "'",
+      "\u2019": "'",
+      "\u201c": "``",
+      "\u201d": "''",
+      "\u2026": "...",
+      "\u00a0": " ",
+      "\u2009": " ",
+      "\u2002": " ",
+      "\u2003": " ",
+      "\u200b": "",
+      "\u00df": "{\\ss}",
+      "\u00e6": "{\\ae}",
+      "\u00c6": "{\\AE}",
+      "\u0153": "{\\oe}",
+      "\u0152": "{\\OE}",
+      "\u00f8": "{\\o}",
+      "\u00d8": "{\\O}",
+      "\u0142": "{\\l}",
+      "\u0141": "{\\L}"
+    };
 
-    let output = String(value).normalize("NFC");
-    for (const [pattern, replacement] of replacements) {
-      output = output.replace(pattern, replacement);
+    let output = "";
+    for (const char of String(value)) {
+      output += this.latexForCharacter(char, directMap);
+    }
+    return this.forcePrintableAscii(output);
+  },
+
+  latexForCharacter(char, directMap) {
+    if (Object.prototype.hasOwnProperty.call(directMap, char)) {
+      return directMap[char];
     }
 
-    output = output
-      .replace(/ö/g, '\\"{o}')
-      .replace(/Ö/g, '\\"{O}')
-      .replace(/ü/g, '\\"{u}')
-      .replace(/Ü/g, '\\"{U}')
-      .replace(/ä/g, '\\"{a}')
-      .replace(/Ä/g, '\\"{A}')
-      .replace(/é/g, "\\'{e}")
-      .replace(/É/g, "\\'{E}")
-      .replace(/è/g, "\\`{e}")
-      .replace(/á/g, "\\'{a}")
-      .replace(/Á/g, "\\'{A}")
-      .replace(/ó/g, "\\'{o}")
-      .replace(/Ó/g, "\\'{O}")
-      .replace(/í/g, "\\'{i}")
-      .replace(/Í/g, "\\'{I}")
-      .replace(/ú/g, "\\'{u}")
-      .replace(/Ú/g, "\\'{U}")
-      .replace(/ñ/g, "\\~{n}")
-      .replace(/Ñ/g, "\\~{N}")
-      .replace(/ç/g, "\\c{c}")
-      .replace(/Ç/g, "\\c{C}");
+    if (/[\x20-\x7E]/.test(char)) {
+      return this.escapeAsciiForLatex(char);
+    }
 
+    const decomposed = char.normalize("NFD");
+    const base = decomposed[0];
+    const marks = decomposed.slice(1);
+    if (/^[A-Za-z]$/.test(base) && marks) {
+      const accented = this.applyLatexCombiningMarks(base, marks);
+      if (accented) {
+        return accented;
+      }
+      return this.escapeAsciiForLatex(base);
+    }
+
+    const asciiFallback = this.asciiToken(char);
+    if (asciiFallback) {
+      return asciiFallback
+        .split("")
+        .map((piece) => this.escapeAsciiForLatex(piece))
+        .join("");
+    }
+
+    return "";
+  },
+
+  applyLatexCombiningMarks(base, marks) {
+    let output = base;
+    for (const mark of marks) {
+      switch (mark) {
+        case "\u0301":
+          output = `\\'{${output}}`;
+          break;
+        case "\u0300":
+          output = `\\\`{${output}}`;
+          break;
+        case "\u0302":
+          output = `\\^{${output}}`;
+          break;
+        case "\u0303":
+          output = `\\~{${output}}`;
+          break;
+        case "\u0308":
+          output = `\\"{${output}}`;
+          break;
+        case "\u0304":
+          output = `\\={${output}}`;
+          break;
+        case "\u0307":
+          output = `\\.{${output}}`;
+          break;
+        case "\u030c":
+          output = `\\v{${output}}`;
+          break;
+        case "\u0327":
+          output = `\\c{${output}}`;
+          break;
+        case "\u0328":
+          output = `\\k{${output}}`;
+          break;
+        case "\u030a":
+          output = base === "A" ? "\\AA{}" : base === "a" ? "\\aa{}" : `\\r{${output}}`;
+          break;
+        default:
+          return "";
+      }
+    }
+    return output;
+  },
+
+  escapeAsciiForLatex(char) {
+    switch (char) {
+      case "\n":
+        return "\n";
+      case "\t":
+        return " ";
+      case "\\":
+        return "\\textbackslash{}";
+      case "{":
+        return "\\{";
+      case "}":
+        return "\\}";
+      case "#":
+        return "\\#";
+      case "$":
+        return "\\$";
+      case "%":
+        return "\\%";
+      case "&":
+        return "\\&";
+      case "_":
+        return "\\_";
+      case "^":
+        return "\\^{}";
+      case "~":
+        return "\\~{}";
+      default:
+        return char;
+    }
+  },
+
+  forcePrintableAscii(value) {
+    let output = "";
+    for (const char of String(value)) {
+      if (char === "\n") {
+        output += "\n";
+        continue;
+      }
+      if (char === "\t") {
+        output += " ";
+        continue;
+      }
+      const code = char.charCodeAt(0);
+      if (code >= 0x20 && code <= 0x7e) {
+        output += char;
+        continue;
+      }
+
+      const asciiFallback = this.asciiToken(char);
+      if (asciiFallback) {
+        output += asciiFallback.replace(/[^\x20-\x7E]/g, "");
+        continue;
+      }
+
+      output += " ";
+    }
     return output;
   },
 
