@@ -177,6 +177,8 @@ var YorklibExporter = {
     }
 
     await this.writeCombinedBibFiles(destinationDirs, results);
+    const missingAbstracts = await this.writeMissingAbstractReport(destinationDirs, results);
+    const missingAbstractsPath = PathUtils.join(destinationDirs.fullbib, "missing_abstracts.txt");
 
     const exported = results.filter((result) => result.status === "exported");
     const skipped = results.filter((result) => result.status === "skipped");
@@ -189,7 +191,9 @@ var YorklibExporter = {
       `Needs attention: ${incomplete.length} -> ${destinationDirs.incomplete}.`,
       `Misc: ${misc.length} -> ${destinationDirs.misc}.`,
       `Combined bibs: ${destinationDirs.fullbib}.`,
+      `Missing abstracts: ${missingAbstracts.length} -> ${missingAbstractsPath}.`,
       `Copied PDFs: ${exported.filter((result) => result.pdfCopied).length}.`,
+      missingAbstracts.length ? missingAbstracts.map((result) => `- ${result.key}: ${result.title}`).join("\n") : "",
       skipped.length ? `Skipped: ${skipped.length}.` : "",
       skipped.length ? skipped.map((result) => `- ${result.title}: ${result.reason}`).join("\n") : ""
     ].filter(Boolean).join("\n\n");
@@ -258,7 +262,7 @@ var YorklibExporter = {
 
     const key = this.buildYorklibKey(metadata);
     const problems = this.collectProblems(metadata);
-    const bucket = this.classifyBucket(problems);
+    const bucket = this.classifyBucket(metadata, problems);
     const destinationDir = destinationDirs[bucket];
     const bibPath = PathUtils.join(destinationDir, `${key}.bib`);
     const bibText = this.renderBibtex(key, metadata);
@@ -269,7 +273,7 @@ var YorklibExporter = {
       problems.push("missing PDF");
     }
 
-    const finalBucket = this.classifyBucket(problems);
+    const finalBucket = this.classifyBucket(metadata, problems);
     if (finalBucket !== bucket) {
       const finalBibPath = PathUtils.join(destinationDirs[finalBucket], `${key}.bib`);
       await IOUtils.move(bibPath, finalBibPath);
@@ -282,7 +286,8 @@ var YorklibExporter = {
       pdfCopied,
       bucket: finalBucket,
       problems,
-      bibText
+      bibText,
+      missingAbstract: !metadata.annote
     };
   },
 
@@ -315,25 +320,48 @@ var YorklibExporter = {
     );
   },
 
+  async writeMissingAbstractReport(destinationDirs, results) {
+    const missingAbstracts = results.filter(
+      (result) => result.status === "exported" && result.missingAbstract
+    );
+    const reportText = missingAbstracts.length
+      ? missingAbstracts.map((result) => `${result.key}\t${result.title}`).join("\n") + "\n"
+      : "";
+    await IOUtils.writeUTF8(
+      PathUtils.join(destinationDirs.fullbib, "missing_abstracts.txt"),
+      reportText
+    );
+    return missingAbstracts;
+  },
+
   extractMetadata(item) {
     const creators = this.getPrimaryCreators(item);
     const authors = creators.map((creator) => this.formatCreator(creator)).filter(Boolean);
     const lastName = this.resolveFirstCreatorLastName(item, creators);
+    const url = item.getField("url") || "";
+    const extra = item.getField("extra") || "";
     const journalAbbreviation = item.getField("journalAbbreviation") || "";
     const journalTitle = item.getField("publicationTitle") || item.getField("websiteTitle") || "";
-    const journalInfo = this.resolveYorklibJournal(journalAbbreviation, journalTitle);
+    const archive = item.getField("archive") || "";
+    const archiveLocation = item.getField("archiveLocation") || "";
+    const archiveID = item.getField("archiveID") || "";
+    const arxivId = this.resolveArxivId(archiveID, archiveLocation, url, extra);
+    const isArxiv = this.isArxivItem(item, archive, archiveLocation, archiveID, url, extra, arxivId);
+    const journalInfo = isArxiv
+      ? { key: "arXiv", abbreviation: "arXiv", matched: true }
+      : this.resolveYorklibJournal(journalAbbreviation, journalTitle);
     const year = this.extractYear(item.getField("date") || item.getField("year"));
     const volume = item.getField("volume") || "";
     const issue = item.getField("issue") || item.getField("number") || "";
     const pages = this.normalizePages(item.getField("pages") || "");
     const annote = item.getField("abstractNote") || "";
-    const doi = item.getField("DOI") || this.extractDoiFromField(item.getField("url") || "");
+    const doi = item.getField("DOI") || this.extractDoiFromField(url);
     const pmcid = this.extractPMCID(item.getField("extra") || "");
 
     return {
       author: authors.join(" and "),
       title: item.getField("title") || "",
-      journal: journalInfo.abbreviation,
+      journal: isArxiv ? "arXiv preprint" : journalInfo.abbreviation,
       journalKey: journalInfo.key,
       journalAbbreviation,
       journalTitle,
@@ -345,7 +373,10 @@ var YorklibExporter = {
       annote,
       doi,
       PMCID: pmcid,
-      lastName
+      lastName,
+      isArxiv,
+      arxivId,
+      archiveLocation
     };
   },
 
@@ -505,12 +536,67 @@ var YorklibExporter = {
     return match ? match[1] : "";
   },
 
+  extractArxivIdFromField(value) {
+    if (!value) {
+      return "";
+    }
+
+    const normalized = String(value).trim();
+    const prefixedMatch = normalized.match(/\barXiv:\s*([A-Za-z0-9.\-]+(?:\/[A-Za-z0-9.\-]+)?)\b/i);
+    if (prefixedMatch) {
+      return prefixedMatch[1];
+    }
+
+    const modernMatch = normalized.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/i);
+    if (modernMatch) {
+      return modernMatch[0];
+    }
+
+    const legacyMatch = normalized.match(/\b[a-z\-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?\b/i);
+    return legacyMatch ? legacyMatch[0] : "";
+  },
+
+  resolveArxivId(archiveID, archiveLocation, url, extra) {
+    return this.extractArxivIdFromField(archiveID)
+      || this.extractArxivIdFromField(url)
+      || this.extractArxivIdFromField(extra)
+      || this.extractArxivIdFromField(archiveLocation);
+  },
+
+  isArxivItem(item, archive, archiveLocation, archiveID, url, extra, arxivId) {
+    const itemTypeID = item?.itemTypeID;
+    const itemType = itemTypeID && Zotero.ItemTypes?.getName
+      ? Zotero.ItemTypes.getName(itemTypeID)
+      : "";
+    const archiveText = [archive, archiveLocation, archiveID, url, extra, itemType]
+      .filter(Boolean)
+      .join(" ");
+    return /\barxiv\b/i.test(archiveText) || Boolean(arxivId);
+  },
+
+  keyTokenSegment(value) {
+    if (!value) {
+      return "";
+    }
+    return this.asciiToken(value).replace(/[^A-Za-z0-9]+/g, "");
+  },
+
+  missingKeyToken(label) {
+    return `XX${label}`;
+  },
+
   buildYorklibKey(metadata) {
-    const last = this.asciiToken(metadata.lastName).replace(/\s+/g, "") || "Unknown";
-    const journal = metadata.journalKey || this.journalToken(metadata.journalAbbreviation || metadata.journal);
-    const year = metadata.year || "";
-    const volume = metadata.volume || "";
-    const pageFrom = this.extractPageFrom(metadata.pages);
+    const last = this.asciiToken(metadata.lastName).replace(/\s+/g, "") || this.missingKeyToken("AUTHOR");
+    const journal = metadata.journalKey
+      || this.journalToken(metadata.journalAbbreviation || metadata.journal)
+      || this.missingKeyToken("JOURNAL");
+    const year = metadata.year || this.missingKeyToken("YEAR");
+    const volume = metadata.volume
+      || (metadata.isArxiv ? "preprint" : this.missingKeyToken("VOL"));
+    const pageFrom = this.extractPageFrom(metadata.pages)
+      || (metadata.isArxiv
+        ? this.keyTokenSegment(metadata.arxivId) || this.missingKeyToken("ARXIV")
+        : this.missingKeyToken("PAGE"));
     return `${last}_${journal}_${year}_v${volume}_p${pageFrom}`;
   },
 
@@ -522,31 +608,38 @@ var YorklibExporter = {
     if (!metadata.lastName || this.asciiToken(metadata.lastName).replace(/\s+/g, "") === "") {
       problems.push("missing first-author surname for key");
     }
-    if (!metadata.journal) {
+    if (!metadata.journal && !metadata.isArxiv) {
       problems.push("missing journal");
     }
-    if (metadata.journalTitle && !metadata.journalAbbreviation) {
+    if (metadata.journalTitle && !metadata.journalAbbreviation && !metadata.isArxiv) {
       problems.push("missing journal abbreviation");
     }
-    if (metadata.journalAbbreviation && !metadata.journalMatched) {
+    if (metadata.journalAbbreviation && !metadata.journalMatched && !metadata.isArxiv) {
       problems.push("journal abbreviation not mapped to Yorklib");
     }
     if (!metadata.year) {
       problems.push("missing year");
     }
-    if (!metadata.volume) {
+    if (!metadata.volume && !metadata.isArxiv) {
       problems.push("missing volume");
     }
-    if (!metadata.pages) {
+    if (!metadata.pages && !metadata.isArxiv) {
       problems.push("missing pages");
     }
-    if (!metadata.doi) {
+    if (!metadata.doi && !metadata.isArxiv) {
       problems.push("missing DOI");
+    }
+    if (metadata.isArxiv && !metadata.arxivId) {
+      problems.push("missing arXiv identifier");
     }
     return problems;
   },
 
-  classifyBucket(problems) {
+  classifyBucket(metadata, problems) {
+    if (metadata.isArxiv) {
+      return "incomplete";
+    }
+
     if (!problems.length) {
       return "complete";
     }
@@ -611,7 +704,18 @@ var YorklibExporter = {
   },
 
   renderBibtex(key, metadata) {
-    const fields = [
+    const fields = metadata.isArxiv ? [
+      ["author", metadata.author],
+      ["title", metadata.title, true],
+      ["journal", metadata.journal],
+      ["year", metadata.year],
+      ["eprint", metadata.arxivId],
+      ["archivePrefix", "arXiv"],
+      ["primaryClass", metadata.archiveLocation],
+      ["annote", metadata.annote, false, true],
+      ["PMCID", metadata.PMCID],
+      ["doi", metadata.doi]
+    ] : [
       ["author", metadata.author],
       ["title", metadata.title, true],
       ["journal", metadata.journal],
