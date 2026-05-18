@@ -1,19 +1,15 @@
-<vbox xmlns="http://www.w3.org/1999/xul"
-      xmlns:html="http://www.w3.org/1999/xhtml"
-      id="zotero-prefpane-yorklib-exporter">
+<vbox>
   <groupbox>
-    <label>
-      <html:h2>Yorklib Exporter</html:h2>
-    </label>
+    <label><html:h2>Yorklib Exporter</html:h2></label>
 
-    <checkbox
-      data-preference="extensions.zotero.yorklib-exporter.wrapAbstract"
-      label="Wrap abstract text at ~50 characters (preserves whole words)"/>
+    <checkbox preference="extensions.zotero.yorklib-exporter.wrapAbstract"
+              native="true"
+              label="Wrap abstract text at ~50 characters (preserves whole words)"/>
 
-    <description style="margin-top: 0.5em; max-width: 40em;">
+    <description style="max-width: 40em;">
       When enabled, the exporter inserts line breaks into the abstract
-      (annote field) at word boundaries near 50 characters so it stays
-      readable in viewers that do not wrap text. Words are never split.
+      (annote field) at word boundaries so it stays readable in viewers
+      that do not wrap text. Words are never split.
     </description>
   </groupbox>
 </vbox>
