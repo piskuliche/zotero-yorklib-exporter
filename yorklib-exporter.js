@@ -103,11 +103,41 @@ var YorklibExporter = {
   version: null,
   rootURI: null,
   menuItemId: "yorklib-export-selected",
+  prefBranch: "yorklib-exporter",
 
   init({ id, version, rootURI }) {
     this.id = id;
     this.version = version;
     this.rootURI = rootURI;
+    this.ensurePrefDefaults();
+    this.registerPreferencePane();
+  },
+
+  ensurePrefDefaults() {
+    if (Zotero.Prefs.get(`${this.prefBranch}.wrapAbstract`) === undefined) {
+      Zotero.Prefs.set(`${this.prefBranch}.wrapAbstract`, true);
+    }
+  },
+
+  registerPreferencePane() {
+    if (!Zotero.PreferencePanes || !Zotero.PreferencePanes.register) {
+      return;
+    }
+    try {
+      Zotero.PreferencePanes.register({
+        pluginID: this.id,
+        src: this.rootURI + "preferences.xhtml",
+        label: "Yorklib Exporter"
+      });
+    } catch (error) {
+      Zotero.logError(error);
+    }
+  },
+
+  getExportOptions() {
+    return {
+      wrapAbstract: Zotero.Prefs.get(`${this.prefBranch}.wrapAbstract`) !== false
+    };
   },
 
   addToAllWindows() {
@@ -165,6 +195,8 @@ var YorklibExporter = {
       return;
     }
 
+    const options = this.getExportOptions();
+
     const outputRoot = await this.pickDestinationDirectory(window);
     if (!outputRoot) {
       return;
@@ -173,7 +205,7 @@ var YorklibExporter = {
     const destinationDirs = await this.ensureOutputDirectories(outputRoot);
     const results = [];
     for (const item of parentItems) {
-      results.push(await this.exportItem(item, destinationDirs));
+      results.push(await this.exportItem(item, destinationDirs, options));
     }
 
     await this.writeCombinedBibFiles(destinationDirs, results);
@@ -250,7 +282,7 @@ var YorklibExporter = {
     return { complete, incomplete, misc, fullbib };
   },
 
-  async exportItem(item, destinationDirs) {
+  async exportItem(item, destinationDirs, options = {}) {
     const metadata = this.extractMetadata(item);
     if (!metadata.title) {
       return {
@@ -265,7 +297,7 @@ var YorklibExporter = {
     const bucket = this.classifyBucket(metadata, problems);
     const destinationDir = destinationDirs[bucket];
     const bibPath = PathUtils.join(destinationDir, `${key}.bib`);
-    const bibText = this.renderBibtex(key, metadata);
+    const bibText = this.renderBibtex(key, metadata, options);
     await IOUtils.writeUTF8(bibPath, bibText);
 
     const pdfCopied = await this.copyFirstPdfAttachment(item, destinationDir, key);
@@ -703,7 +735,7 @@ var YorklibExporter = {
     };
   },
 
-  renderBibtex(key, metadata) {
+  renderBibtex(key, metadata, options = {}) {
     const fields = metadata.isArxiv ? [
       ["author", metadata.author],
       ["title", metadata.title, true],
@@ -733,7 +765,10 @@ var YorklibExporter = {
       if (!rawValue && !alwaysInclude) {
         continue;
       }
-      const normalizedValue = this.normalizeBibFieldValue(field, rawValue == null ? "" : String(rawValue));
+      let normalizedValue = this.normalizeBibFieldValue(field, rawValue == null ? "" : String(rawValue));
+      if (field === "annote" && options.wrapAbstract) {
+        normalizedValue = this.wrapTextAtWordBoundary(normalizedValue, 50);
+      }
       const value = this.formatBibValue(normalizedValue, Boolean(protectTitle));
       lines.push(`    ${(field + " =").padEnd(11, " ")} ${value},`);
     }
@@ -749,6 +784,28 @@ var YorklibExporter = {
       return normalized.replace(/\s*\n\s*/g, " ").replace(/\s+/g, " ").trim();
     }
     return normalized;
+  },
+
+  wrapTextAtWordBoundary(text, maxWidth) {
+    if (!text) {
+      return "";
+    }
+    const words = String(text).split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      return "";
+    }
+    const lines = [];
+    let currentLine = words[0];
+    for (let i = 1; i < words.length; i++) {
+      if (currentLine.length >= maxWidth) {
+        lines.push(currentLine);
+        currentLine = words[i];
+      } else {
+        currentLine += " " + words[i];
+      }
+    }
+    lines.push(currentLine);
+    return lines.join("\n");
   },
 
   formatBibValue(value, protectTitle) {

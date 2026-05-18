@@ -14,5 +14,5 @@ PY
 
 output="yorklib-exporter-${version}.xpi"
 rm -f "$output"
-zip -qr "$output" manifest.json bootstrap.js yorklib-exporter.js README.md
+zip -qr "$output" manifest.json bootstrap.js yorklib-exporter.js preferences.xhtml README.md
 printf 'Wrote %s\n' "$script_dir/$output"
