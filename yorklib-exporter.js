@@ -895,6 +895,10 @@ var YorklibExporter = {
   },
 
   latexForCharacter(char, directMap) {
+    if (char === "\n") {
+      return "\n";
+    }
+
     if (Object.prototype.hasOwnProperty.call(directMap, char)) {
       return directMap[char];
     }
