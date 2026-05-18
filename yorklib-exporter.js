@@ -262,7 +262,8 @@ var YorklibExporter = {
 
   async pickDestinationDirectory(window) {
     const picker = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
-    picker.init(window, "Choose Export Folder", Ci.nsIFilePicker.modeGetFolder);
+    const target = window.browsingContext || window;
+    picker.init(target, "Choose Export Folder", Ci.nsIFilePicker.modeGetFolder);
     const response = await new Promise((resolve) => picker.open(resolve));
     if (response !== Ci.nsIFilePicker.returnOK) {
       return null;
