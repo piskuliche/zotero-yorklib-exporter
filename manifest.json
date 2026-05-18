@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Yorklib Exporter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Export selected Zotero items as Yorklib-style BibTeX files and matching PDFs.",
   "author": "OpenAI Codex",
   "homepage_url": "https://example.invalid/yorklib-exporter",
@@ -9,8 +9,7 @@
     "zotero": {
       "id": "yorklib-exporter@openai.local",
       "update_url": "https://example.invalid/yorklib-exporter/updates.json",
-      "strict_min_version": "7.0",
-      "strict_max_version": "8.0.*"
+      "strict_min_version": "7.0"
     }
   }
 }
